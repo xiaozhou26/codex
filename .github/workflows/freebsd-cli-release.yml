@@ -120,7 +120,7 @@ jobs:
             rustup toolchain install "$RUST_VERSION" --profile minimal
             rustup default "$RUST_VERSION"
           run: |
-            set -u
+            set -eu
             export PATH="$CARGO_HOME/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
             export PROTOC=/usr/local/bin/protoc
             export CARGO_INCREMENTAL=1
@@ -148,6 +148,8 @@ jobs:
             uname -m
             uname -K
 
+            workspace_root="$PWD"
+            export workspace_root
             cd codex-rs
             cargo fetch
 
@@ -164,25 +166,20 @@ jobs:
             PY
             grep -Fq 'protoc_executable' code-mode-protocol/build.rs && exit 1 || true
 
-            set +e
             bash -o pipefail -c '
               cargo build \
                 --release \
                 --package codex-cli \
                 --bin codex \
-                2>&1 | tee "$GITHUB_WORKSPACE/.freebsd-build.log"
+                2>&1 | tee "$workspace_root/.freebsd-build.log"
             '
-            build_status=$?
-            set -e
-            printf '%s\n' "$build_status" > "$GITHUB_WORKSPACE/.freebsd-build-status"
-            test "$build_status" -eq 0 || exit 0
 
             source_binary="$CARGO_TARGET_DIR/release/codex"
             artifact="codex-$TARGET_TRIPLE"
             test -x "$source_binary"
-            install -m 0755 "$source_binary" "$GITHUB_WORKSPACE/dist/$artifact"
+            install -m 0755 "$source_binary" "$workspace_root/dist/$artifact"
 
-            cd "$GITHUB_WORKSPACE"
+            cd "$workspace_root"
             file "dist/$artifact" | tee dist/FILE-INFO.txt
             grep -Eq 'ELF 64-bit.*x86-64.*FreeBSD|ELF 64-bit.*FreeBSD.*x86-64' dist/FILE-INFO.txt
             ldd "dist/$artifact" | tee dist/ELF-AUDIT.txt
@@ -230,17 +227,6 @@ jobs:
           path: .freebsd-build.log
           if-no-files-found: warn
           retention-days: 14
-
-      - name: Check FreeBSD build result
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -f .freebsd-build-status
-          test "$(cat .freebsd-build-status)" = 0
-          test -x "dist/codex-$TARGET_TRIPLE"
-          cd dist
-          sha256sum -c "SHA256SUMS-$TARGET_TRIPLE.txt"
-          file "codex-$TARGET_TRIPLE" | grep -F FreeBSD
 
       - name: Upload FreeBSD binary artifact
         uses: actions/upload-artifact@v4
