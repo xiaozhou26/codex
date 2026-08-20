@@ -151,6 +151,19 @@ jobs:
             cd codex-rs
             cargo fetch
 
+            # protoc-bin-vendored has no FreeBSD x86_64 payload. Use the
+            # native FreeBSD protoc package already installed in the VM.
+            python3 - <<'PY'
+            from pathlib import Path
+            path = Path("code-mode-protocol/build.rs")
+            text = path.read_text()
+            line = "    config.protoc_executable(protoc_bin_vendored::protoc_bin_path()?);\n"
+            if line not in text:
+                raise SystemExit("expected protoc vendored line not found")
+            path.write_text(text.replace(line, ""))
+            PY
+            grep -Fq 'protoc_executable' code-mode-protocol/build.rs && exit 1 || true
+
             set +e
             bash -o pipefail -c '
               cargo build \
