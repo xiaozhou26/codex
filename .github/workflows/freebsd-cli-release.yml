@@ -102,7 +102,7 @@ jobs:
         with:
           release: "14.3"
           arch: x86_64
-          cpu: 2
+          cpu: 3
           mem: 16384
           sync: rsync
           copyback: true
@@ -124,8 +124,8 @@ jobs:
             export PATH="$CARGO_HOME/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
             export PROTOC=/usr/local/bin/protoc
             # The codex workspace has several large Rust crates. Limit rustc
-            # parallelism so the native FreeBSD VM does not get OOM-killed.
-            export CARGO_BUILD_JOBS=1
+            # parallelism to three rustc processes within the 16 GiB VM.
+            export CARGO_BUILD_JOBS=3
             export CARGO_INCREMENTAL=0
             export CARGO_NET_RETRY=10
             export CARGO_HTTP_TIMEOUT=600
