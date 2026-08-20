@@ -154,7 +154,6 @@ jobs:
             set +e
             bash -o pipefail -c '
               cargo build \
-                --locked \
                 --release \
                 --package codex-cli \
                 --bin codex \
