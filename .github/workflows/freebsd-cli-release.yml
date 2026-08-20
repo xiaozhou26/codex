@@ -112,7 +112,7 @@ jobs:
             export IGNORE_OSVERSION=yes
             export ASSUME_ALWAYS_YES=yes
             pkg update -f
-            pkg install -y bash ca_root_nss cmake curl git gmake nasm perl5 pkgconf protobuf python3 rustup-init sqlite3
+            pkg install -y bash ca_root_nss cmake curl dbus git gmake nasm perl5 pkgconf protobuf python3 rustup-init sqlite3
             export PATH="$CARGO_HOME/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
             if ! command -v rustup >/dev/null 2>&1; then
               rustup-init -y --no-modify-path --profile minimal --default-toolchain "$RUST_VERSION"
@@ -266,6 +266,3 @@ jobs:
             "dist/SHA256SUMS-$TARGET_TRIPLE.txt" \
             dist/BUILD-INFO.txt \
             dist/ELF-AUDIT.txt
-
-
-
