@@ -149,7 +149,7 @@ jobs:
             uname -K
 
             cd codex-rs
-            cargo fetch --locked
+            cargo fetch
 
             set +e
             bash -o pipefail -c '
@@ -266,5 +266,6 @@ jobs:
             "dist/SHA256SUMS-$TARGET_TRIPLE.txt" \
             dist/BUILD-INFO.txt \
             dist/ELF-AUDIT.txt
+
 
 
