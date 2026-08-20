@@ -1,0 +1,271 @@
+name: Build codex CLI for native FreeBSD
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Exact upstream Rust release tag"
+        required: true
+        type: string
+        default: "rust-v0.149.0-alpha.5"
+      publish_release:
+        description: "Upload the FreeBSD assets to the matching GitHub Release"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: codex-freebsd14.3-${{ inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  CARGO_HOME: ${{ github.workspace }}/.cargo-freebsd
+  RUSTUP_HOME: ${{ github.workspace }}/.rustup-freebsd
+  CARGO_TARGET_DIR: ${{ github.workspace }}/codex-rs/target/freebsd14.3-amd64
+  FREEBSD_RELEASE: "14.3"
+  TARGET_TRIPLE: x86_64-unknown-freebsd
+  RUST_VERSION: "1.95.0"
+
+jobs:
+  build-freebsd:
+    name: codex-x86_64-unknown-freebsd
+    if: github.repository == 'xiaozhou26/codex'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+
+    steps:
+      - name: Check out exact release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify fork tag matches upstream
+        id: meta
+        shell: bash
+        env:
+          CODEX_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          case "$CODEX_TAG" in
+            rust-v*) ;;
+            *) echo "tag must start with rust-v" >&2; exit 1 ;;
+          esac
+
+          origin_refs="$(git ls-remote --tags origin \
+            "refs/tags/$CODEX_TAG" "refs/tags/$CODEX_TAG^{}")"
+          upstream_refs="$(git ls-remote --tags https://github.com/openai/codex.git \
+            "refs/tags/$CODEX_TAG" "refs/tags/$CODEX_TAG^{}")"
+
+          resolve_commit() {
+            refs="$1"
+            peeled="$(printf '%s\n' "$refs" | awk -v r="refs/tags/$CODEX_TAG^{}" '$2 == r {print $1}')"
+            direct="$(printf '%s\n' "$refs" | awk -v r="refs/tags/$CODEX_TAG" '$2 == r {print $1}')"
+            printf '%s\n' "${peeled:-$direct}"
+          }
+
+          origin_commit="$(resolve_commit "$origin_refs")"
+          upstream_commit="$(resolve_commit "$upstream_refs")"
+          test -n "$origin_commit"
+          test -n "$upstream_commit"
+          test "$origin_commit" = "$upstream_commit"
+          test "$(git rev-parse HEAD)" = "$upstream_commit"
+
+          version="${CODEX_TAG#rust-v}"
+          manifest_version="$(python3 -c 'import tomllib; print(tomllib.load(open("codex-rs/Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
+          test "$manifest_version" = "$version"
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'commit=%s\n' "$upstream_commit" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Cargo, Rust and target caches
+        id: cargo-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .cargo-freebsd/registry
+            .cargo-freebsd/git
+            .cargo-freebsd/bin
+            .rustup-freebsd
+            codex-rs/target/freebsd14.3-amd64
+          key: codex-freebsd14.3-amd64-rust-${{ env.RUST_VERSION }}-${{ hashFiles('codex-rs/Cargo.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            codex-freebsd14.3-amd64-rust-${{ env.RUST_VERSION }}-${{ hashFiles('codex-rs/Cargo.lock') }}-
+            codex-freebsd14.3-amd64-rust-${{ env.RUST_VERSION }}-
+            codex-freebsd14.3-amd64-
+
+      - name: Build only codex CLI in native FreeBSD 14.3 VM
+        uses: vmactions/freebsd-vm@v1.5.3
+        with:
+          release: "14.3"
+          arch: x86_64
+          cpu: 4
+          mem: 12288
+          sync: rsync
+          copyback: true
+          cache-after-prepare: true
+          envs: CARGO_HOME RUSTUP_HOME CARGO_TARGET_DIR FREEBSD_RELEASE TARGET_TRIPLE RUST_VERSION
+          prepare: |
+            export IGNORE_OSVERSION=yes
+            export ASSUME_ALWAYS_YES=yes
+            pkg update -f
+            pkg install -y bash ca_root_nss cmake curl git gmake nasm perl5 pkgconf protobuf python3 rustup-init sqlite3
+            export PATH="$CARGO_HOME/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+            if ! command -v rustup >/dev/null 2>&1; then
+              rustup-init -y --no-modify-path --profile minimal --default-toolchain "$RUST_VERSION"
+            fi
+            rustup toolchain install "$RUST_VERSION" --profile minimal
+            rustup default "$RUST_VERSION"
+          run: |
+            set -u
+            export PATH="$CARGO_HOME/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+            export PROTOC=/usr/local/bin/protoc
+            export CARGO_INCREMENTAL=1
+            export CARGO_NET_RETRY=10
+            export CARGO_HTTP_TIMEOUT=600
+            export SSL_CERT_FILE=/usr/local/share/certs/ca-root-nss.crt
+            export GIT_SSL_CAINFO="$SSL_CERT_FILE"
+            export CARGO_HTTP_CAINFO="$SSL_CERT_FILE"
+            unset MALLOC_CONF || true
+
+            git config --global --add safe.directory "$PWD"
+            test -r "$SSL_CERT_FILE"
+            mkdir -p "$CARGO_HOME" "$RUSTUP_HOME" "$CARGO_TARGET_DIR" dist
+
+            if ! command -v rustup >/dev/null 2>&1; then
+              rustup-init -y --no-modify-path --profile minimal --default-toolchain "$RUST_VERSION"
+            fi
+            rustup toolchain install "$RUST_VERSION" --profile minimal
+            rustup default "$RUST_VERSION"
+
+            rustc --version
+            cargo --version
+            protoc --version
+            freebsd-version -u
+            uname -m
+            uname -K
+
+            cd codex-rs
+            cargo fetch --locked
+
+            set +e
+            bash -o pipefail -c '
+              cargo build \
+                --locked \
+                --release \
+                --package codex-cli \
+                --bin codex \
+                2>&1 | tee "$GITHUB_WORKSPACE/.freebsd-build.log"
+            '
+            build_status=$?
+            set -e
+            printf '%s\n' "$build_status" > "$GITHUB_WORKSPACE/.freebsd-build-status"
+            test "$build_status" -eq 0 || exit 0
+
+            source_binary="$CARGO_TARGET_DIR/release/codex"
+            artifact="codex-$TARGET_TRIPLE"
+            test -x "$source_binary"
+            install -m 0755 "$source_binary" "$GITHUB_WORKSPACE/dist/$artifact"
+
+            cd "$GITHUB_WORKSPACE"
+            file "dist/$artifact" | tee dist/FILE-INFO.txt
+            grep -Eq 'ELF 64-bit.*x86-64.*FreeBSD|ELF 64-bit.*FreeBSD.*x86-64' dist/FILE-INFO.txt
+            ldd "dist/$artifact" | tee dist/ELF-AUDIT.txt
+            ! grep -Eq 'libutil\.so\.10|libasound\.so\.2|not found' dist/ELF-AUDIT.txt
+
+            env -u MALLOC_CONF "dist/$artifact" --version | tee dist/VERSION.txt
+            grep -F '${{ steps.meta.outputs.version }}' dist/VERSION.txt
+            env -u MALLOC_CONF "dist/$artifact" --help > dist/HELP.txt
+            test -s dist/HELP.txt
+
+            git rev-parse HEAD > dist/SOURCE_REV
+            cat > dist/BUILD-INFO.txt <<EOF
+            tag=${{ inputs.tag }}
+            version=${{ steps.meta.outputs.version }}
+            source=${{ steps.meta.outputs.commit }}
+            target=$TARGET_TRIPLE
+            freebsd=$FREEBSD_RELEASE
+            rust=$RUST_VERSION
+            cargo_package=codex-cli
+            cargo_bin=codex
+            EOF
+
+            tar -C dist -czf "dist/$artifact.tar.gz" "$artifact"
+            cd dist
+            sha256 -q "$artifact" | awk -v f="$artifact" '{print $1 "  " f}' > "SHA256SUMS-$TARGET_TRIPLE.txt"
+            sha256 -q "$artifact.tar.gz" | awk -v f="$artifact.tar.gz" '{print $1 "  " f}' >> "SHA256SUMS-$TARGET_TRIPLE.txt"
+
+      - name: Save Cargo, Rust and target caches
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .cargo-freebsd/registry
+            .cargo-freebsd/git
+            .cargo-freebsd/bin
+            .rustup-freebsd
+            codex-rs/target/freebsd14.3-amd64
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-${{ steps.meta.outputs.version }}-freebsd14.3-build-log
+          path: .freebsd-build.log
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Check FreeBSD build result
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f .freebsd-build-status
+          test "$(cat .freebsd-build-status)" = 0
+          test -x "dist/codex-$TARGET_TRIPLE"
+          cd dist
+          sha256sum -c "SHA256SUMS-$TARGET_TRIPLE.txt"
+          file "codex-$TARGET_TRIPLE" | grep -F FreeBSD
+
+      - name: Upload FreeBSD binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-${{ steps.meta.outputs.version }}-x86_64-unknown-freebsd
+          path: |
+            dist/codex-x86_64-unknown-freebsd
+            dist/codex-x86_64-unknown-freebsd.tar.gz
+            dist/SHA256SUMS-x86_64-unknown-freebsd.txt
+            dist/BUILD-INFO.txt
+            dist/ELF-AUDIT.txt
+            dist/FILE-INFO.txt
+            dist/VERSION.txt
+            dist/SOURCE_REV
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      - name: Create or update GitHub Release
+        if: inputs.publish_release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CODEX_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release view "$CODEX_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create "$CODEX_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --title "$CODEX_TAG" \
+              --notes "Native FreeBSD 14.3 amd64 build of the codex CLI."
+          gh release upload "$CODEX_TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            "dist/codex-$TARGET_TRIPLE" \
+            "dist/codex-$TARGET_TRIPLE.tar.gz" \
+            "dist/SHA256SUMS-$TARGET_TRIPLE.txt" \
+            dist/BUILD-INFO.txt \
+            dist/ELF-AUDIT.txt
+
+
