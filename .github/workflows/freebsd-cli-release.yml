@@ -37,6 +37,15 @@ jobs:
     timeout-minutes: 360
 
     steps:
+      - name: Free runner disk space for target copyback
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+            /usr/lib/jvm /usr/share/swift
+          sudo docker image prune -af >/dev/null 2>&1 || true
+          df -h /
+
       - name: Check out exact release tag
         uses: actions/checkout@v4
         with:
