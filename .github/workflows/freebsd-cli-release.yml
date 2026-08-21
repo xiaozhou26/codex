@@ -181,6 +181,9 @@ jobs:
             artifact="codex-$TARGET_TRIPLE"
             test -x "$source_binary"
             install -m 0755 "$source_binary" "$workspace_root/dist/$artifact"
+            # Release profile keeps debug info; strip before packaging so the
+            # tar.gz stays around 200 MB instead of ~1.2 GB.
+            strip "$workspace_root/dist/$artifact"
 
             cd "$workspace_root"
             file "dist/$artifact" | tee dist/FILE-INFO.txt
@@ -222,28 +225,11 @@ jobs:
             codex-rs/target/freebsd14.3-amd64
           key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
-      - name: Upload build log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: codex-${{ steps.meta.outputs.version }}-freebsd14.3-build-log
-          path: .freebsd-build.log
-          if-no-files-found: warn
-          retention-days: 14
-
       - name: Upload FreeBSD binary artifact
         uses: actions/upload-artifact@v4
         with:
           name: codex-${{ steps.meta.outputs.version }}-x86_64-unknown-freebsd
-          path: |
-            dist/codex-x86_64-unknown-freebsd
-            dist/codex-x86_64-unknown-freebsd.tar.gz
-            dist/SHA256SUMS-x86_64-unknown-freebsd.txt
-            dist/BUILD-INFO.txt
-            dist/ELF-AUDIT.txt
-            dist/FILE-INFO.txt
-            dist/VERSION.txt
-            dist/SOURCE_REV
+          path: dist/codex-x86_64-unknown-freebsd.tar.gz
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
@@ -263,8 +249,4 @@ jobs:
               --title "$CODEX_TAG" \
               --notes "Native FreeBSD 14.3 amd64 build of the codex CLI."
           gh release upload "$CODEX_TAG" --repo "$GITHUB_REPOSITORY" --clobber \
-            "dist/codex-$TARGET_TRIPLE" \
-            "dist/codex-$TARGET_TRIPLE.tar.gz" \
-            "dist/SHA256SUMS-$TARGET_TRIPLE.txt" \
-            dist/BUILD-INFO.txt \
-            dist/ELF-AUDIT.txt
+            "dist/codex-$TARGET_TRIPLE.tar.gz"
