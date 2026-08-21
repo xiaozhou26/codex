@@ -2561,6 +2561,17 @@
           "description": "Attributes to add to every exported trace span.",
           "type": "object"
         },
+        "tool_result": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ToolResultLogConfig"
+            }
+          ],
+          "default": {
+            "max_bytes": 2048
+          },
+          "description": "Byte limit for tool-result log output; independent of model-visible output."
+        },
         "trace_exporter": {
           "allOf": [
             {
@@ -3366,6 +3377,10 @@
           "format": "int64",
           "minimum": 1.0,
           "type": "integer"
+        },
+        "use_history_notes_extension": {
+          "description": "Whether to expose the built-in history and notes extension.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -3406,6 +3421,19 @@
         "turn_metadata_includes_tool_info": {
           "description": "Include authoritative tool information in per-turn request metadata.",
           "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "ToolResultLogConfig": {
+      "description": "Limit for the text included in `codex.tool_result` log records. This does not affect model-visible output. Raising it can expose more tool data to logs.",
+      "properties": {
+        "max_bytes": {
+          "default": 2048,
+          "description": "Maximum UTF-8 bytes before the truncation notice. Defaults to 2048.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
         }
       },
       "type": "object"
@@ -3543,7 +3571,9 @@
               "decrease_reasoning_effort": null,
               "edit_queued_message": null,
               "increase_reasoning_effort": null,
-              "interrupt_turn": null
+              "interrupt_turn": null,
+              "next_permission_mode": null,
+              "previous_permission_mode": null
             },
             "composer": {
               "history_search_next": null,
@@ -3939,6 +3969,22 @@
             }
           ],
           "description": "Interrupt the active turn."
+        },
+        "next_permission_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Switch to the next available permission mode."
+        },
+        "previous_permission_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Switch to the previous available permission mode."
         }
       },
       "type": "object"
@@ -4281,7 +4327,9 @@
             "decrease_reasoning_effort": null,
             "edit_queued_message": null,
             "increase_reasoning_effort": null,
-            "interrupt_turn": null
+            "interrupt_turn": null,
+            "next_permission_mode": null,
+            "previous_permission_mode": null
           }
         },
         "composer": {
