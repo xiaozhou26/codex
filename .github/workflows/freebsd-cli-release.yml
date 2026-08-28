@@ -1,261 +1,113 @@
-name: Build codex CLI for native FreeBSD
+name: FreeBSD codex-cli release
 
 on:
   workflow_dispatch:
     inputs:
-      tag:
-        description: "Exact upstream Rust release tag"
+      version:
+        description: FreeBSD pkg version
         required: true
-        type: string
-        default: "rust-v0.149.0-alpha.5"
-      publish_release:
-        description: "Upload the FreeBSD assets to the matching GitHub Release"
-        required: false
-        type: boolean
-        default: false
+        default: "0.150.0"
+      tag:
+        description: GitHub release tag
+        required: true
+        default: rust-v0.150.0
 
 permissions:
   contents: write
 
 concurrency:
-  group: codex-freebsd14.3-${{ inputs.tag }}
+  group: freebsd-codex-cli-${{ inputs.version }}
   cancel-in-progress: false
 
-env:
-  CARGO_HOME: ${{ github.workspace }}/.cargo-freebsd
-  RUSTUP_HOME: ${{ github.workspace }}/.rustup-freebsd
-  CARGO_TARGET_DIR: ${{ github.workspace }}/codex-rs/target/freebsd14.3-amd64
-  FREEBSD_RELEASE: "14.3"
-  TARGET_TRIPLE: x86_64-unknown-freebsd
-  RUST_VERSION: "1.95.0"
-
 jobs:
-  build-freebsd:
-    name: codex-x86_64-unknown-freebsd
-    if: github.repository == 'xiaozhou26/codex'
+  package-freebsd:
+    if: github.repository == 'xiaozhou26/freebsd-codex'
     runs-on: ubuntu-24.04
-    timeout-minutes: 360
+    timeout-minutes: 30
 
     steps:
-      - name: Free runner disk space for target copyback
-        run: |
-          set -euo pipefail
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
-            /usr/local/.ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
-            /usr/lib/jvm /usr/share/swift
-          sudo docker image prune -af >/dev/null 2>&1 || true
-          df -h /
-
-      - name: Check out exact release tag
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.tag }}
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Verify fork tag matches upstream
-        id: meta
-        shell: bash
+      - name: Fetch codex package in FreeBSD 14.4
+        uses: vmactions/freebsd-vm@83b151f58c6047089f4c80eb5ba2039d158ce093 # v1.5.3
         env:
-          CODEX_TAG: ${{ inputs.tag }}
-        run: |
-          set -euo pipefail
-          case "$CODEX_TAG" in
-            rust-v*) ;;
-            *) echo "tag must start with rust-v" >&2; exit 1 ;;
-          esac
-
-          origin_refs="$(git ls-remote --tags origin \
-            "refs/tags/$CODEX_TAG" "refs/tags/$CODEX_TAG^{}")"
-          upstream_refs="$(git ls-remote --tags https://github.com/openai/codex.git \
-            "refs/tags/$CODEX_TAG" "refs/tags/$CODEX_TAG^{}")"
-
-          resolve_commit() {
-            refs="$1"
-            peeled="$(printf '%s\n' "$refs" | awk -v r="refs/tags/$CODEX_TAG^{}" '$2 == r {print $1}')"
-            direct="$(printf '%s\n' "$refs" | awk -v r="refs/tags/$CODEX_TAG" '$2 == r {print $1}')"
-            printf '%s\n' "${peeled:-$direct}"
-          }
-
-          origin_commit="$(resolve_commit "$origin_refs")"
-          upstream_commit="$(resolve_commit "$upstream_refs")"
-          test -n "$origin_commit"
-          test -n "$upstream_commit"
-          test "$origin_commit" = "$upstream_commit"
-          test "$(git rev-parse HEAD)" = "$upstream_commit"
-
-          version="${CODEX_TAG#rust-v}"
-          manifest_version="$(python3 -c 'import tomllib; print(tomllib.load(open("codex-rs/Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
-          test "$manifest_version" = "$version"
-          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
-          printf 'commit=%s\n' "$upstream_commit" >> "$GITHUB_OUTPUT"
-
-      - name: Restore Cargo, Rust and target caches
-        id: cargo-cache
-        uses: actions/cache/restore@v4
+          CODEX_VERSION: ${{ inputs.version }}
         with:
-          path: |
-            .cargo-freebsd/registry
-            .cargo-freebsd/git
-            .cargo-freebsd/bin
-            .rustup-freebsd
-            codex-rs/target/freebsd14.3-amd64
-          key: codex-freebsd14.3-amd64-rust-${{ env.RUST_VERSION }}-${{ hashFiles('codex-rs/Cargo.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: |
-            codex-freebsd14.3-amd64-rust-${{ env.RUST_VERSION }}-${{ hashFiles('codex-rs/Cargo.lock') }}-
-            codex-freebsd14.3-amd64-rust-${{ env.RUST_VERSION }}-
-            codex-freebsd14.3-amd64-
-
-      - name: Build only codex CLI in native FreeBSD 14.3 VM
-        uses: vmactions/freebsd-vm@v1.5.3
-        with:
-          release: "14.3"
+          release: "14.4"
           arch: x86_64
-          cpu: 3
-          mem: 16384
+          cpu: 2
+          mem: 4096
           sync: rsync
           copyback: true
-          cache-after-prepare: true
-          envs: CARGO_HOME RUSTUP_HOME CARGO_TARGET_DIR FREEBSD_RELEASE TARGET_TRIPLE RUST_VERSION
-          prepare: |
-            export IGNORE_OSVERSION=yes
-            export ASSUME_ALWAYS_YES=yes
-            pkg update -f
-            pkg install -y bash ca_root_nss cmake curl dbus git gmake nasm perl5 pkgconf protobuf python3 rustup-init sqlite3
-            export PATH="$CARGO_HOME/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
-            if ! command -v rustup >/dev/null 2>&1; then
-              rustup-init -y --no-modify-path --profile minimal --default-toolchain "$RUST_VERSION"
-            fi
-            rustup toolchain install "$RUST_VERSION" --profile minimal
-            rustup default "$RUST_VERSION"
+          envs: CODEX_VERSION
           run: |
-            set -eu
-            export PATH="$CARGO_HOME/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
-            export PROTOC=/usr/local/bin/protoc
-            # The codex workspace has several large Rust crates. Limit rustc
-            # parallelism to three rustc processes within the 16 GiB VM.
-            export CARGO_BUILD_JOBS=3
-            export CARGO_INCREMENTAL=0
-            export CARGO_NET_RETRY=10
-            export CARGO_HTTP_TIMEOUT=600
-            export SSL_CERT_FILE=/usr/local/share/certs/ca-root-nss.crt
-            export GIT_SSL_CAINFO="$SSL_CERT_FILE"
-            export CARGO_HTTP_CAINFO="$SSL_CERT_FILE"
-            unset MALLOC_CONF || true
-
-            git config --global --add safe.directory "$PWD"
-            test -r "$SSL_CERT_FILE"
-            mkdir -p "$CARGO_HOME" "$RUSTUP_HOME" "$CARGO_TARGET_DIR" dist
-
-            if ! command -v rustup >/dev/null 2>&1; then
-              rustup-init -y --no-modify-path --profile minimal --default-toolchain "$RUST_VERSION"
-            fi
-            rustup toolchain install "$RUST_VERSION" --profile minimal
-            rustup default "$RUST_VERSION"
-
-            rustc --version
-            cargo --version
-            protoc --version
-            freebsd-version -u
-            uname -m
-            uname -K
-
-            workspace_root="$PWD"
-            export workspace_root
-            cd codex-rs
-            cargo fetch
-
-            # protoc-bin-vendored has no FreeBSD x86_64 payload. Use the
-            # native FreeBSD protoc package already installed in the VM.
-            python3 - <<'PY'
-            from pathlib import Path
-            path = Path("code-mode-protocol/build.rs")
-            text = path.read_text()
-            line = "    config.protoc_executable(protoc_bin_vendored::protoc_bin_path()?);\n"
-            if line not in text:
-                raise SystemExit("expected protoc vendored line not found")
-            path.write_text(text.replace(line, ""))
-            PY
-            grep -Fq 'protoc_executable' code-mode-protocol/build.rs && exit 1 || true
-
-            bash -o pipefail -c '
-              cargo build \
-                --release \
-                --package codex-cli \
-                --bin codex \
-                2>&1 | tee "$workspace_root/.freebsd-build.log"
-            '
-
-            source_binary="$CARGO_TARGET_DIR/release/codex"
-            artifact="codex-$TARGET_TRIPLE"
-            test -x "$source_binary"
-            install -m 0755 "$source_binary" "$workspace_root/dist/$artifact"
-            # Release profile keeps debug info; strip before packaging so the
-            # tar.gz stays around 200 MB instead of ~1.2 GB.
-            strip "$workspace_root/dist/$artifact"
-
-            cd "$workspace_root"
-            file "dist/$artifact" | tee dist/FILE-INFO.txt
-            grep -Eq 'ELF 64-bit.*x86-64.*FreeBSD|ELF 64-bit.*FreeBSD.*x86-64' dist/FILE-INFO.txt
-            ldd "dist/$artifact" | tee dist/ELF-AUDIT.txt
-            ! grep -Eq 'libutil\.so\.10|libasound\.so\.2|not found' dist/ELF-AUDIT.txt
-
-            env -u MALLOC_CONF "dist/$artifact" --version | tee dist/VERSION.txt
-            grep -F '${{ steps.meta.outputs.version }}' dist/VERSION.txt
-            env -u MALLOC_CONF "dist/$artifact" --help > dist/HELP.txt
-            test -s dist/HELP.txt
-
-            git rev-parse HEAD > dist/SOURCE_REV
-            cat > dist/BUILD-INFO.txt <<EOF
-            tag=${{ inputs.tag }}
-            version=${{ steps.meta.outputs.version }}
-            source=${{ steps.meta.outputs.commit }}
-            target=$TARGET_TRIPLE
-            freebsd=$FREEBSD_RELEASE
-            rust=$RUST_VERSION
-            cargo_package=codex-cli
-            cargo_bin=codex
+            set -eux
+            freebsd-version
+            sysctl hw.ncpu hw.physmem
+            df -h /
+            mkdir -p /usr/local/etc/pkg/repos "$GITHUB_WORKSPACE/dist"
+            cat > /usr/local/etc/pkg/repos/FreeBSD.conf <<'EOF'
+            FreeBSD: {
+              url: "pkg+https://pkg.FreeBSD.org/${ABI}/latest",
+              mirror_type: "srv",
+              signature_type: "fingerprints",
+              fingerprints: "/usr/share/keys/pkg",
+              enabled: yes
+            }
             EOF
+            /usr/sbin/pkg bootstrap -f -y -r FreeBSD
+            pkg update -f -r FreeBSD
+            test "$(pkg rquery -U -r FreeBSD '%n|%v|%o' codex)" \
+              = "codex|$CODEX_VERSION|misc/codex"
+            pkg install -U -y -r FreeBSD "codex-$CODEX_VERSION"
+            test "$(pkg query '%n|%v|%o' codex)" \
+              = "codex|$CODEX_VERSION|misc/codex"
+            pkg check -s codex
+            pkg which -q /usr/local/bin/codex
 
-            tar -C dist -czf "dist/$artifact.tar.gz" "$artifact"
-            cd dist
-            sha256 -q "$artifact" | awk -v f="$artifact" '{print $1 "  " f}' > "SHA256SUMS-$TARGET_TRIPLE.txt"
-            sha256 -q "$artifact.tar.gz" | awk -v f="$artifact.tar.gz" '{print $1 "  " f}' >> "SHA256SUMS-$TARGET_TRIPLE.txt"
+            binary=/usr/local/bin/codex
+            test -x "$binary"
+            file "$binary" | tee /tmp/codex-file.txt
+            grep -F 'ELF 64-bit' /tmp/codex-file.txt
+            grep -F 'x86-64' /tmp/codex-file.txt
+            grep -F FreeBSD /tmp/codex-file.txt
+            ldd "$binary" > /tmp/codex-ldd.txt
+            cat /tmp/codex-ldd.txt
+            ! grep -Fq 'not found' /tmp/codex-ldd.txt
+            test "$("$binary" --version)" = "codex-cli $CODEX_VERSION"
+            "$binary" --help >/tmp/codex-help.txt
+            grep -q '^Usage: codex' /tmp/codex-help.txt
 
-      - name: Save Cargo, Rust and target caches
-        if: always()
-        uses: actions/cache/save@v4
+            install -m 0755 "$binary" \
+              "$GITHUB_WORKSPACE/dist/codex-x86_64-unknown-freebsd"
+            sha256 -q "$GITHUB_WORKSPACE/dist/codex-x86_64-unknown-freebsd"
+
+      - name: Verify copied-back binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq 1
+          test -x dist/codex-x86_64-unknown-freebsd
+          file dist/codex-x86_64-unknown-freebsd | grep -F FreeBSD
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          path: |
-            .cargo-freebsd/registry
-            .cargo-freebsd/git
-            .cargo-freebsd/bin
-            .rustup-freebsd
-            codex-rs/target/freebsd14.3-amd64
-          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
-
-      - name: Upload FreeBSD binary artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: codex-${{ steps.meta.outputs.version }}-x86_64-unknown-freebsd
-          path: dist/codex-x86_64-unknown-freebsd.tar.gz
+          name: codex-${{ inputs.version }}-x86_64-unknown-freebsd
+          path: dist/codex-x86_64-unknown-freebsd
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
 
-      - name: Create or update GitHub Release
-        if: inputs.publish_release
+      - name: Create or update GitHub release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           CODEX_TAG: ${{ inputs.tag }}
+          CODEX_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          gh release view "$CODEX_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
-            gh release create "$CODEX_TAG" \
-              --repo "$GITHUB_REPOSITORY" \
-              --verify-tag \
+          gh release view "$CODEX_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$CODEX_TAG" --repo "$GITHUB_REPOSITORY" \
               --title "$CODEX_TAG" \
-              --notes "Native FreeBSD 14.3 amd64 build of the codex CLI."
+              --notes "FreeBSD Ports codex-cli $CODEX_VERSION."
           gh release upload "$CODEX_TAG" --repo "$GITHUB_REPOSITORY" --clobber \
-            "dist/codex-$TARGET_TRIPLE.tar.gz"
+            dist/codex-x86_64-unknown-freebsd
